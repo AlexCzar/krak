@@ -1,0 +1,38 @@
+== krak
+Fan/pump speed control on linux for NZXT Kraken X62.
+
+This is basically a Rust rewrite of the python script from https://github.com/leaty/camctl
+
+== DISCLAIMER
+This is WIP and is provided as is, use at your own risk.
+
+Although I have been running the original code from leaty without any problems
+for a couple of years, there could still be unexpected side-effects, both from
+the original code and due to rewriting it.
+
+I've just started learning Rust, so code is a bit of a mess.
+Suggestions are welcome both as issues and as PRs.
+
+== Supported devices
+*NZXT Kraken X62*
+
+== Tested on
+OpenSuse Tumbleweed 20210307
+
+Kernel: 5.11.2-1-default
+
+== Installation
+=== Building from source
+Pre-requisits: git, rust 1.50+, cargo.
+
+. `git clone --depth 1 https://github.com/AlexCzar/krak.git && cd krak`
+. `cargo build --release`
+. `cp target/release/krak /usr/local/bin/`
+
+=== Getting from crates.io
+TODO!
+
+== Usage
+`krak --help`
+
+To be able to change parameters you'll need to run with root privileges, e.g. using `sudo`.
