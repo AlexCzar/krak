@@ -196,3 +196,7 @@ fn write_to_device(device: &rusb::Device<GlobalContext>, buf: &[u8]) {
         })
         .unwrap();
 }
+
+#[cfg(test)]
+#[allow(unused_must_use)]
+mod tests;
