@@ -7,3 +7,6 @@ edition = "2018"
 [dependencies]
 getopts = "0.2"
 rusb = "0.8"
+
+[dev-dependencies]
+test-case = "1.1"
