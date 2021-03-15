@@ -4,6 +4,7 @@ extern crate rusb;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::num::ParseIntError;
+use std::ops::Range;
 use std::time::Duration;
 
 use getopts::{Matches, Options};
@@ -21,38 +22,44 @@ fn main() {
         print_usage(program, opts)
     } else {
         match validate(opt_matches) {
-            Ok((fan_speed, pump_speed)) => set_speeds(fan_speed, pump_speed),
+            Ok(params) => set_params(params),
             Err(f) => eprintln!("Invalid options: {}", f),
-        };
-    }
-}
-
-fn set_speeds(fan_speed: Option<u8>, pump_speed: Option<u8>) {
-    let kraken = Krak {
-        device: find_kraken(),
-    };
-
-    match kraken.detach() {
-        Ok(_) => {
-            kraken.set_fan_speed(fan_speed);
-            kraken.set_pump_speed(pump_speed);
-            kraken.reattach().unwrap();
         }
-        Err(f) => eprintln!("AAARGH!!! {}", f),
     }
 }
 
-fn validate(opt_matches: Matches) -> Result<(Option<u8>, Option<u8>), ParseIntError> {
-    let fan_speed = opt_matches.opt_get("f")?;
-    if let Some(f) = fan_speed {
-        assert!(f <= 100 && f >= 10, "FANSPEED should be with range 10-100");
+fn set_params(params: Vec<DeviceParam>) {
+    let kraken = Kraken::new();
+
+    kraken.detach();
+    for param in params {
+        kraken.write(param);
+    }
+    kraken.reattach();
+}
+
+fn validate(opt_matches: Matches) -> Result<Vec<DeviceParam>, ParseIntError> {
+    let range: Range<u8> = 10..100;
+
+    let mut params: Vec<DeviceParam> = Vec::new();
+
+    if let Some(fan_speed) = opt_matches.opt_get("f")? {
+        assert!(
+            range.contains(&fan_speed),
+            "FANSPEED should be within range 10-100"
+        );
+        params.push(FanSpeed(fan_speed))
     }
 
-    let pump_speed = opt_matches.opt_get("p")?;
-    if let Some(p) = pump_speed {
-        assert!(p <= 100 && p >= 10, "PUMPSPEED should be with range 10-100");
+    if let Some(pump_speed) = opt_matches.opt_get("p")? {
+        assert!(
+            range.contains(&pump_speed),
+            "PUMPSPEED should be within range 10-100"
+        );
+        params.push(PumpSpeed(pump_speed))
     }
-    Result::Ok((fan_speed, pump_speed))
+
+    Ok(params)
 }
 
 fn no_options_present(opt_matches: &Matches) -> bool {
@@ -86,55 +93,19 @@ fn build_options() -> Options {
     opts
 }
 
-struct Krak {
+struct Kraken {
     device: rusb::Device<GlobalContext>,
 }
 
-impl Krak {}
-
-trait KrakControl {
-    fn detach(&self) -> rusb::Result<()>;
-    fn reattach(self) -> rusb::Result<()>;
-    fn set_fan_speed(&self, fan_speed: Option<u8>);
-    fn set_pump_speed(&self, pump_speed: Option<u8>);
-}
-
-impl KrakControl for Krak {
-    fn detach(&self) -> rusb::Result<()> {
-        self.device.open().and_then(|mut handle| {
-            if handle.kernel_driver_active(0).unwrap() {
-                println!("Detaching kernel driver...");
-                handle.detach_kernel_driver(0)
-            } else {
-                Ok(())
-            }
-        })
-    }
-
-    fn reattach(self) -> rusb::Result<()> {
-        self.device.open().and_then(|mut handle| {
-            if !handle.kernel_driver_active(0).unwrap() {
-                println!("Re-attaching kernel driver...");
-                handle.attach_kernel_driver(0).unwrap();
-            };
-            Ok(())
-        })
-    }
-
-    fn set_fan_speed(&self, fan_speed: Option<u8>) {
-        if let Some(fan_speed) = fan_speed {
-            self.write(FanSpeed(fan_speed));
-        }
-    }
-
-    fn set_pump_speed(&self, pump_speed: Option<u8>) {
-        if let Some(pump_speed) = pump_speed {
-            self.write(PumpSpeed(pump_speed))
+impl Kraken {
+    fn new() -> Kraken {
+        Kraken {
+            device: find_kraken_device(),
         }
     }
 }
 
-fn find_kraken() -> Device<GlobalContext> {
+fn find_kraken_device() -> Device<GlobalContext> {
     let vid = 0x1e71;
     let pid = 0x170e;
     let devices = rusb::devices().expect("Could not enumerate USB devices");
@@ -142,37 +113,39 @@ fn find_kraken() -> Device<GlobalContext> {
         .iter()
         .find(|d| {
             let dd = d.device_descriptor().unwrap();
-            let condition = dd.vendor_id() == vid && dd.product_id() == pid;
-            condition
+            dd.vendor_id() == vid && dd.product_id() == pid
         })
-        .expect(
-            format!(
+        .unwrap_or_else(|| {
+            panic!(
                 "Could not find usb device with VendorId: {} and ProductId: {}.",
                 vid, pid
             )
-            .as_str(),
-        )
+        })
 }
 
-enum DeviceParam {
-    FanSpeed(u8),
-    PumpSpeed(u8),
+trait KrakenControl {
+    fn detach(&self);
+    fn reattach(self);
+    fn write(&self, param: DeviceParam);
 }
 
-impl Display for DeviceParam {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FanSpeed(speed) => {
-                write!(f, "fan speed to {}%", speed)
-            }
-            PumpSpeed(speed) => {
-                write!(f, "pump speed to {}%", speed)
-            }
+impl KrakenControl for Kraken {
+    fn detach(&self) {
+        let mut handle = self.device.open().expect("Could not open device.");
+        if handle.kernel_driver_active(0).unwrap() {
+            println!("Detaching kernel driver...");
+            handle.detach_kernel_driver(0).unwrap()
         }
     }
-}
 
-impl Krak {
+    fn reattach(self) {
+        let mut handle = self.device.open().expect("Could not open device.");
+        if !handle.kernel_driver_active(0).unwrap() {
+            println!("Re-attaching kernel driver...");
+            handle.attach_kernel_driver(0).unwrap();
+        }
+    }
+
     fn write(&self, param: DeviceParam) {
         println!("Setting {}.", param);
         let buf = match param {
@@ -187,14 +160,28 @@ impl Krak {
     }
 }
 
+enum DeviceParam {
+    FanSpeed(u8),
+    PumpSpeed(u8),
+}
+
+impl Display for DeviceParam {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FanSpeed(speed) => write!(f, "fan speed to {}%", speed),
+            PumpSpeed(speed) => write!(f, "pump speed to {}%", speed),
+        }
+    }
+}
+
 fn write_to_device(device: &rusb::Device<GlobalContext>, buf: &[u8]) {
-    device
+    let write_result = device
         .open()
-        .and_then(|handle| {
-            handle.write_bulk(1, buf, Duration::from_secs(1)).unwrap();
-            Ok(())
-        })
-        .unwrap();
+        .and_then(|handle| handle.write_bulk(1, buf, Duration::from_secs(1)));
+    match write_result {
+        Ok(_) => println!("done"),
+        Err(f) => eprintln!("Error: {}", f),
+    }
 }
 
 #[cfg(test)]
