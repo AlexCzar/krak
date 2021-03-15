@@ -20,7 +20,7 @@ extern crate rusb;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::num::ParseIntError;
-use std::ops::Range;
+use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use getopts::{Matches, Options};
@@ -29,18 +29,22 @@ use rusb::{Device, GlobalContext};
 use crate::DeviceParam::{FanSpeed, PumpSpeed};
 
 fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run<'e>() -> Result<(), CliValidationError<'e>> {
     let args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
     let opts = build_options();
     let opt_matches = match_opts(args, &opts);
 
     if opt_matches.opt_present("h") || no_options_present(&opt_matches) {
-        print_usage(program, opts)
+        Ok(print_usage(program, opts))
     } else {
-        match validate(opt_matches) {
-            Ok(params) => set_params(params),
-            Err(f) => eprintln!("Invalid options: {}", f),
-        }
+        validate(opt_matches).map(set_params)
     }
 }
 
@@ -54,32 +58,64 @@ fn set_params(params: Vec<DeviceParam>) {
     kraken.reattach();
 }
 
-fn validate(opt_matches: Matches) -> Result<Vec<DeviceParam>, ParseIntError> {
-    let range: Range<u8> = 10..100;
+fn validate<'e>(opt_matches: Matches) -> Result<Vec<DeviceParam>, CliValidationError<'e>> {
+    let range = 10..=100;
 
     let mut params: Vec<DeviceParam> = Vec::new();
-
-    if let Some(fan_speed) = opt_matches.opt_get("f")? {
-        assert!(
-            range.contains(&fan_speed),
-            "FANSPEED should be within range 10-100"
-        );
-        params.push(FanSpeed(fan_speed))
-    }
-
-    if let Some(pump_speed) = opt_matches.opt_get("p")? {
-        assert!(
-            range.contains(&pump_speed),
-            "PUMPSPEED should be within range 10-100"
-        );
-        params.push(PumpSpeed(pump_speed))
-    }
-
+    parse_param(&opt_matches, &range, "fan-speed", FanSpeed)?.map(|dp| params.push(dp));
+    parse_param(&opt_matches, &range, "pump-speed", PumpSpeed)?.map(|dp| params.push(dp));
     Ok(params)
 }
 
+#[derive(Debug)]
+struct CliValidationError<'e> {
+    value: String,
+    param: &'e str,
+    reason: String,
+}
+
+impl Display for CliValidationError<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Value '{}' is not valid for parameter '{}': {}. Try --help.",
+            self.value, self.param, self.reason
+        )
+    }
+}
+
+fn parse_param<'e>(
+    opt_matches: &Matches,
+    range: &RangeInclusive<u8>,
+    param: &'e str,
+    creator: fn(u8) -> DeviceParam,
+) -> Result<Option<DeviceParam>, CliValidationError<'e>> {
+    opt_matches
+        .opt_get(param)
+        .or_else(|f: ParseIntError| {
+            Err(CliValidationError {
+                param,
+                value: opt_matches.opt_str(param).unwrap(),
+                reason: f.to_string(),
+            })
+        })?
+        .map(|fan_speed| {
+            if range.contains(&fan_speed) {
+                Ok(Some(creator(fan_speed)))
+            } else {
+                Err(CliValidationError {
+                    param,
+                    value: fan_speed.to_string(),
+                    reason: "out of range".to_string(),
+                })
+            }
+        })
+        .unwrap_or_else(|| Ok(None))
+}
+
 fn no_options_present(opt_matches: &Matches) -> bool {
-    !opt_matches.opt_present("f") && !opt_matches.opt_present("p")
+    let all_options = vec!["f".to_owned(), "p".to_owned()];
+    !opt_matches.opts_present(&all_options)
 }
 
 fn print_usage(program: String, opts: Options) {
@@ -104,7 +140,7 @@ fn build_options() -> Options {
         "p",
         "pump-speed",
         "Pump speed in 10 - 100 range.",
-        "PUMPSEED",
+        "PUMPSPEED",
     );
     opts
 }
@@ -176,6 +212,7 @@ impl KrakenControl for Kraken {
     }
 }
 
+#[derive(Debug, PartialOrd, PartialEq)]
 enum DeviceParam {
     FanSpeed(u8),
     PumpSpeed(u8),

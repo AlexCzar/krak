@@ -14,37 +14,51 @@ See the License for the specific language governing permissions and
 limitations under the License.
  */
 
-#[cfg(test)]
+use test_case::test_case;
+
 use super::*;
 
-#[test]
-#[should_panic(expected = "FANSPEED should be within range 10-100")]
-fn fan_speed_should_fail_validation_if_value_less_than_range() {
+#[test_case("--fan-speed", 9; "FANSPEED less than range min")]
+#[test_case("--fan-speed", 101; "FANSPEED more than range max")]
+#[test_case("--pump-speed", 9; "PUMPSPEED less than range min")]
+#[test_case("--pump-speed", 101; "PUMPSPEED more than range max")]
+fn should_fail_validation_if_speed_is_outside_of_range(test_param: &str, test_value: u8) {
     let opts = build_options();
-    let command_line = vec!["krak", "-f9"];
-    opts.parse(command_line).map(|r| validate(r));
+    let fanspeed = format!("{}={}", test_param, test_value);
+    let command_line = vec!["krak", fanspeed.as_str()];
+    let result = opts.parse(command_line).map(|r| validate(r)).unwrap();
+    assert!(result.is_err());
+    if let Err(CliValidationError {
+        value,
+        param,
+        reason,
+    }) = result
+    {
+        assert_eq!(test_value.to_string(), value);
+        assert_eq!("out of range", reason);
+        assert_eq!(param, param)
+    }
 }
 
-#[test]
-#[should_panic(expected = "FANSPEED should be within range 10-100")]
-fn fan_speed_should_fail_validation_if_value_more_than_range() {
+#[test_case("--fan-speed", 10, FanSpeed(10); "FANSPEED is range.min")]
+#[test_case("--fan-speed", 42, FanSpeed(42); "FANSPEED is inside range")]
+#[test_case("--fan-speed", 100, FanSpeed(100); "FANSPEED is range.max")]
+#[test_case("--pump-speed", 10, PumpSpeed(10); "PUMPSPEED is range.min")]
+#[test_case("--pump-speed", 42, PumpSpeed(42); "PUMPSPEED is inside range")]
+#[test_case("--pump-speed", 100, PumpSpeed(100); "PUMPSPEED is range.max")]
+fn should_pass_validation_if_speed_is_in_range(
+    test_param: &str,
+    test_value: u8,
+    test_opt: DeviceParam,
+) {
     let opts = build_options();
-    let command_line = vec!["krak", "-f101"];
-    opts.parse(command_line).map(|r| validate(r));
-}
+    let fanspeed = format!("{}={}", test_param, test_value);
+    let command_line = vec!["krak", fanspeed.as_str()];
+    let result = opts.parse(command_line).map(|r| validate(r)).unwrap();
 
-#[test]
-#[should_panic(expected = "PUMPSPEED should be within range 10-100")]
-fn pump_speed_should_fail_validation_if_value_less_than_range() {
-    let opts = build_options();
-    let command_line = vec!["krak", "-p9"];
-    opts.parse(command_line).map(|r| validate(r));
-}
-
-#[test]
-#[should_panic(expected = "PUMPSPEED should be within range 10-100")]
-fn pump_speed_should_fail_validation_if_value_more_than_range() {
-    let opts = build_options();
-    let command_line = vec!["krak", "-p101"];
-    opts.parse(command_line).map(|r| validate(r));
+    assert!(result.is_ok());
+    if let Ok(vec) = result {
+        assert_eq!(vec.len(), 1);
+        assert_eq!(vec.first().unwrap(), &test_opt);
+    }
 }
